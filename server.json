@@ -3,7 +3,7 @@
   "name": "io.github.olekpuchka/albert-heijn-mcp",
   "title": "Albert Heijn",
   "description": "Unofficial Albert Heijn server: products, bonus deals, recipes, shopping list, orders and receipts.",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "repository": {
     "url": "https://github.com/olekpuchka/albert-heijn-mcp",
     "source": "github"
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "albert-heijn-mcp",
-      "version": "1.7.1",
+      "version": "1.7.2",
       "runtimeHint": "npx",
       "runtimeArguments": [
         {
