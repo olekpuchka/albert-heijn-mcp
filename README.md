@@ -378,7 +378,7 @@ Tools that return data also return it as [structured output](https://modelcontex
 
 | Tool | Description |
 |---|---|
-| `ah_search_recipes` | Search Allerhande recipes; Dutch terms work best. |
+| `ah_search_recipes` | Search Allerhande recipes; Dutch terms work best. `filters` narrows by diet, course, cuisine, occasion, season or cooking method (e.g. `vegetarian`, `quick`, `italian`), and works without a query too; `sort` orders by relevance, newest or popular. |
 | `ah_get_recipe` | Ingredients, steps, and nutrition per serving. `servings` scales the ingredients. |
 | `ah_add_recipe_to_shopping_list` | Match a recipe's ingredients to products and add them to the list in one step. It prefers products on bonus (`prefer_bonus=false` turns that off); `skip` leaves out what you have, and `dry_run=true` previews the matches. |
 

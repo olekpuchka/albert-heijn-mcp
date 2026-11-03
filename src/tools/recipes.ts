@@ -1,6 +1,15 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { addProductsToShoppingList, ahPageUrl, getRecipe, type Product, recipeUrl, searchRecipes } from "../ahapi/index.ts";
+import {
+  addProductsToShoppingList,
+  ahPageUrl,
+  getRecipe,
+  type Product,
+  type RecipeFilter,
+  type RecipeSort,
+  recipeUrl,
+  searchRecipes,
+} from "../ahapi/index.ts";
 import { addAuthedTool, nonFatal, orDefault, parallel, structured, type ToolContext, wrapError } from "./common.ts";
 import { search } from "./products.ts";
 import { listCall } from "./shoppingList.ts";
@@ -9,6 +18,109 @@ import { productSummary, summarizeProduct } from "./views.ts";
 const num = z.number().optional();
 const str = z.string().optional();
 const strs = z.array(z.string()).optional();
+
+/** Recipe search filters → AH filter group and value. */
+const RECIPE_FILTERS = {
+  // Labels
+  easy: ["veel-gebruikt", "makkelijk"],
+  quick: ["veel-gebruikt", "snel"],
+  budget: ["veel-gebruikt", "budget"],
+  healthy: ["veel-gebruikt", "gezond"],
+  light: ["veel-gebruikt", "slank"],
+  // Course
+  main_course: ["menugang", "hoofdgerecht"],
+  starter: ["menugang", "voorgerecht"],
+  side_dish: ["menugang", "bijgerecht"],
+  dessert: ["menugang", "nagerecht"],
+  breakfast: ["menugang", "ontbijt"],
+  brunch: ["menugang", "brunch"],
+  lunch: ["menugang", "lunch"],
+  snack: ["menugang", "tussendoortje"],
+  appetizer: ["menugang", "borrelhapje"],
+  baking: ["menugang", "gebak"],
+  kids: ["menugang", "kindergerecht"],
+  // Dish
+  pasta: ["soort-gerecht", "pasta"],
+  rice: ["soort-gerecht", "rijst"],
+  salad: ["soort-gerecht", "salade"],
+  soup: ["soort-gerecht", "soep"],
+  stamppot: ["soort-gerecht", "stamppot"],
+  quiche: ["soort-gerecht", "quiche"],
+  wrap: ["soort-gerecht", "wrap"],
+  sandwich: ["soort-gerecht", "brood-sandwiches"],
+  // Main ingredient
+  meat: ["recepten-met", "vlees"],
+  poultry: ["recepten-met", "gevogelte"],
+  fish: ["recepten-met", "vis"],
+  shellfish: ["recepten-met", "schaal-schelpdieren"],
+  meat_substitute: ["recepten-met", "vleesvervanger"],
+  // Diet
+  vegetarian: ["speciale-wensen", "vegetarisch"],
+  vegan: ["speciale-wensen", "veganistisch"],
+  no_meat: ["speciale-wensen", "zonder-vlees"],
+  no_meat_or_fish: ["speciale-wensen", "zonder-vlees-vis"],
+  gluten_free: ["speciale-wensen", "glutenvrij"],
+  lactose_free: ["speciale-wensen", "lactosevrij"],
+  high_protein: ["speciale-wensen", "eiwitrijk"],
+  keto: ["speciale-wensen", "keto"],
+  // Occasion
+  christmas: ["momenten", "kerst"],
+  easter: ["momenten", "pasen"],
+  new_year: ["momenten", "oud-en-nieuw"],
+  birthday: ["momenten", "verjaardag"],
+  barbecue: ["momenten", "barbecue"],
+  picnic: ["momenten", "picknick"],
+  party: ["momenten", "borrel"],
+  // Season
+  spring: ["seizoen", "lente"],
+  summer: ["seizoen", "zomer"],
+  autumn: ["seizoen", "herfst"],
+  winter: ["seizoen", "winter"],
+  // Cooking method
+  oven: ["kooktechniek", "oven"],
+  airfryer: ["kooktechniek", "airfryer"],
+  grill: ["kooktechniek", "grillen"],
+  stir_fry: ["kooktechniek", "roerbakken-wokken"],
+  stew: ["kooktechniek", "stoven"],
+  steam: ["kooktechniek", "stomen"],
+  // Cuisine
+  italian: ["keuken", "italiaans"],
+  dutch: ["keuken", "nederlands"],
+  french: ["keuken", "frans"],
+  spanish: ["keuken", "spaans"],
+  greek: ["keuken", "grieks"],
+  mediterranean: ["keuken", "mediterraan"],
+  middle_eastern: ["keuken", "midden-oosters"],
+  moroccan: ["keuken", "marokkaans"],
+  turkish: ["keuken", "turks"],
+  asian: ["keuken", "aziatisch"],
+  chinese: ["keuken", "chinees"],
+  japanese: ["keuken", "japans"],
+  thai: ["keuken", "thais"],
+  vietnamese: ["keuken", "vietnamees"],
+  indian: ["keuken", "indiaas"],
+  indonesian: ["keuken", "indonesisch"],
+  surinamese: ["keuken", "surinaams"],
+  mexican: ["keuken", "mexicaans"],
+  american: ["keuken", "amerikaans"],
+} as const satisfies Record<string, readonly [string, string]>;
+type RecipeFilterName = keyof typeof RECIPE_FILTERS;
+
+const RECIPE_SORTS = { relevance: "MOST_RELEVANT", newest: "NEWEST", popular: "POPULAR" } as const satisfies Record<
+  string,
+  RecipeSort
+>;
+type RecipeSortName = keyof typeof RECIPE_SORTS;
+
+/** Filter names → AH filters, one per group. */
+function recipeFilters(names: readonly RecipeFilterName[]): RecipeFilter[] {
+  const groups = new Map<string, Set<string>>();
+  for (const name of names) {
+    const [group, value] = RECIPE_FILTERS[name];
+    groups.set(group, (groups.get(group) ?? new Set()).add(value));
+  }
+  return [...groups].map(([group, values]) => ({ group, values: [...values] }));
+}
 
 /** Words that mark an ingredient nobody buys: "kokend water", "500 ml water", not "waterkers" or "kokoswater". */
 const TAP_WATER = new Set(["water", "kraanwater", "ijswater"]);
@@ -105,15 +217,30 @@ export function registerRecipeTools(server: McpServer, ctx: ToolContext): void {
       kind: "readOnly",
       description:
         "Search Allerhande, Albert Heijn's recipe collection. Dutch search terms work best, " +
-        "e.g. 'pasta', 'vegetarisch', 'stamppot', 'kip curry'. " +
-        "Returns id, title, url, cook_minutes, servings, courses, nutri_score, rating. " +
-        "Use the id with ah_get_recipe for ingredients and steps.",
+        "e.g. 'pasta', 'stamppot', 'kip curry'; a recipe matches when it has all the words. " +
+        "filters narrows results to recipes matching all of them, e.g. ['vegetarian', 'quick', 'italian']: " +
+        "a label (easy, quick, budget, healthy, light), course (main_course, lunch, dessert, ...), " +
+        "dish (pasta, soup, salad, ...), main ingredient (meat, fish, ...), diet (vegan, gluten_free, ...), " +
+        "occasion, season, cooking method (oven, airfryer, ...) or cuisine (italian, asian, ...). " +
+        "query may be left out to browse by filters alone. " +
+        "sort orders results: relevance (default), newest, popular. " +
+        "Returns id, title, url, cook_minutes, servings, courses, nutri_score, rating, and corrected_query " +
+        "when AH fixed a typo. Use the id with ah_get_recipe for ingredients and steps.",
       input: {
-        query: z.string().describe("Search text, e.g. 'pasta zalm'"),
+        query: z.string().optional().describe("Search text, e.g. 'pasta zalm'"),
+        filters: z
+          .array(z.enum(Object.keys(RECIPE_FILTERS) as [RecipeFilterName, ...RecipeFilterName[]]))
+          .optional()
+          .describe('Only recipes matching all of these, e.g. ["vegetarian", "quick"]'),
+        sort: z
+          .enum(Object.keys(RECIPE_SORTS) as [RecipeSortName, ...RecipeSortName[]])
+          .optional()
+          .describe("Result order (default relevance)"),
         limit: z.number().int().optional().describe("Maximum number of results (default 10, max 30)"),
       },
       output: {
         total: z.number(),
+        corrected_query: str,
         recipes: z.array(
           z.object({
             id: z.number(),
@@ -131,12 +258,23 @@ export function registerRecipeTools(server: McpServer, ctx: ToolContext): void {
       },
     },
     async (c, args) => {
-      if (!args.query.trim()) throw new Error("query is required");
-      const { total, recipes } = await searchRecipes(c, args.query, Math.min(orDefault(args.limit, 10), 30));
-      const message = recipes.length ? undefined : `No recipes found for "${args.query}".`;
+      const text = args.query?.trim() ?? "";
+      const filters = recipeFilters(args.filters ?? []);
+      if (!text && filters.length === 0) throw new Error("provide a query, filters, or both");
+      const { total, recipes, correctedText } = await searchRecipes(c, text, Math.min(orDefault(args.limit, 10), 30), {
+        filters,
+        sort: RECIPE_SORTS[args.sort ?? "relevance"],
+      });
+      // A message replaces the JSON text, so only an empty result gets one; corrected_query carries a correction.
+      const searchedText = correctedText ? `"${correctedText}" (corrected from "${text}")` : text && `"${text}"`;
+      const searched = [searchedText, args.filters?.length && `filters ${args.filters.join(", ")}`]
+        .filter(Boolean)
+        .join(" with ");
+      const message = recipes.length ? undefined : `No recipes found for ${searched}.`;
       return structured(
         {
           total,
+          corrected_query: correctedText,
           recipes: recipes.map((r) => ({
             id: r.id,
             title: r.title,

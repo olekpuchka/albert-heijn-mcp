@@ -59,19 +59,44 @@ function decodeEntities(s: string): string {
   });
 }
 
-export async function searchRecipes(c: AhClient, text: string, size: number): Promise<{ total: number; recipes: RecipeSummary[] }> {
-  const query = `query RecipeSearch($query: RecipeSearchParams!) {
-  recipeSearch(query: $query) {
+export type RecipeSort = "MOST_RELEVANT" | "NEWEST" | "POPULAR";
+
+/** A recipe must match every filter and, within a filter, every value. */
+export interface RecipeFilter {
+  /** Filter group, e.g. "keuken". */
+  group: string;
+  /** Values within the group, e.g. ["italiaans"]. */
+  values: string[];
+}
+
+export interface RecipeSearchOptions {
+  filters: RecipeFilter[];
+  sort: RecipeSort;
+}
+
+export interface RecipeSearchResult {
+  total: number;
+  recipes: RecipeSummary[];
+  /** The text AH searched for instead, when it corrected a typo. */
+  correctedText?: string;
+}
+
+/** Empty text lists all recipes matching the filters. */
+export async function searchRecipes(c: AhClient, text: string, size: number, opts: RecipeSearchOptions): Promise<RecipeSearchResult> {
+  const query = `query RecipeSearch($searchText: String, $size: PageSize, $sortBy: RecipeSearchSortOption, $filters: [RecipeSearchQueryFilter!]) {
+  recipeSearchV2(searchText: $searchText, size: $size, sortBy: $sortBy, filters: $filters, recipeIds: []) {
+    correctedSearchTerm
     page { total }
     result { id title slug nutriScore courses time { cook oven wait } serving { number type } rating { average count } }
   }
 }`;
-  const data = await c.graphql<{ recipeSearch: { page?: { total: number }; result: RecipeSummary[] } }>(query, {
-    query: { searchText: text, size },
-  });
+  const { recipeSearchV2: data } = await c.graphql<{
+    recipeSearchV2: { correctedSearchTerm?: string | null; page?: { total: number }; result: RecipeSummary[] };
+  }>(query, { searchText: text, size, sortBy: opts.sort, filters: opts.filters });
   return {
-    total: data.recipeSearch.page?.total ?? 0,
-    recipes: data.recipeSearch.result.map((r) => ({ ...r, title: decodeEntities(r.title) })),
+    total: data.page?.total ?? 0,
+    recipes: data.result.map((r) => ({ ...r, title: decodeEntities(r.title) })),
+    correctedText: data.correctedSearchTerm || undefined,
   };
 }
 
