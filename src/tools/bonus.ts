@@ -1,14 +1,18 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  activatePersonalOffer,
   type AhClient,
   bonusGroupUrl,
   type BonusOffer,
   type BonusPeriod,
+  getBonusBox,
   getBonusGroupProducts,
   getBonusPeriods,
   getBonusSection,
   getPreviouslyBoughtBonus,
+  isUnauthorized,
+  type PersonalOffer,
   productUrl,
 } from "../ahapi/index.ts";
 import { log } from "../log.ts";
@@ -69,7 +73,6 @@ export function registerBonusTools(server: McpServer, ctx: ToolContext): void {
       const offers: z.infer<typeof offerView>[] = [];
       const add = (o: { id?: number; segment?: string; title: string; was?: number; now?: number; mechanism?: string | null }) => {
         if (offers.length >= limit || (query && !o.title.toLowerCase().includes(query))) return;
-        const discount = o.was && o.now ? Math.round((1 - o.now / o.was) * 100) : undefined;
         offers.push({
           id: o.id || undefined,
           bonus_segment_id: o.segment || undefined,
@@ -78,7 +81,7 @@ export function registerBonusTools(server: McpServer, ctx: ToolContext): void {
           original_price: o.was || undefined,
           // Absent for deals like "2 voor 1.19"; bonus_mechanism describes those.
           bonus_price: o.now || undefined,
-          discount_percentage: discount || undefined,
+          discount_percentage: discountPercentage(o.was, o.now),
           bonus_mechanism: o.mechanism || undefined,
         });
       };
@@ -123,6 +126,165 @@ export function registerBonusTools(server: McpServer, ctx: ToolContext): void {
       return structured({ products: (await getBonusGroupProducts(c, args.segment_id, p)).map(summarizeProduct) });
     },
   );
+
+  addAuthedTool(
+    server,
+    ctx,
+    {
+      name: "ah_get_personal_offers",
+      title: "Albert Heijn: Personal Offers",
+      kind: "readOnly",
+      description:
+        "Get the user's personal Albert Heijn offers (the Bonus Box, 'persoonlijke bonus'): " +
+        "deals picked for this member that only apply after they are activated. " +
+        "Returns max_activations (how many offers the member may activate this week), activated_count, " +
+        "and per offer: id, title, status ('activated' or 'available'), original_price, bonus_price, " +
+        "discount_percentage, unit, and product_id when the offer covers one product. " +
+        "For an offer on several products, pass its id as segment_id to ah_get_bonus_group_products to list them. " +
+        "Activate offers with ah_activate_personal_offer. Set period='next' for next week's offers once AH publishes them.",
+      input: { period: period.describe("Which bonus week: 'current' (default) or 'next'") },
+      output: {
+        max_activations: z.number().optional(),
+        activated_count: z.number(),
+        offers: z.array(personalOfferView),
+      },
+    },
+    async (c, args) => {
+      const p = await bonusPeriod(ctx, c, args.period);
+      if (typeof p === "string") return structured({ activated_count: 0, offers: [] }, p);
+      const box = await getBonusBox(c, p);
+      return structured(
+        {
+          max_activations: box.maxActivations,
+          activated_count: box.offers.filter((o) => o.activated).length,
+          offers: box.offers.map(viewPersonalOffer),
+        },
+        box.offers.length ? undefined : `The user has no personal offers for ${p.start} to ${p.end}.`,
+      );
+    },
+  );
+
+  addAuthedTool(
+    server,
+    ctx,
+    {
+      name: "ah_activate_personal_offer",
+      title: "Albert Heijn: Activate Personal Offer",
+      // Not additive: an activation uses up the weekly limit and can't be undone, so clients should confirm it.
+      kind: "destructive",
+      description:
+        "Activate one or more of the user's personal Albert Heijn offers (Bonus Box) so the discount applies " +
+        "in the store and online. Get offer ids from ah_get_personal_offers. " +
+        "AH allows only a limited number of activations per week (max_activations) and an activation " +
+        "cannot be undone, so only activate the offers the user chose. Offers that are already active are skipped.",
+      input: {
+        offer_ids: z
+          .array(z.string())
+          .max(MAX_ACTIVATIONS)
+          .describe('Offer ids from ah_get_personal_offers, e.g. ["575604"]'),
+        period: period.describe("Bonus week of the offers: 'current' (default) or 'next'"),
+      },
+      output: {
+        activated: z.array(z.object({ id: z.string(), title: z.string() })),
+        already_active: z.array(z.object({ id: z.string(), title: z.string() })),
+        failed: z.array(z.object({ id: z.string(), title: z.string().optional(), error: z.string() })),
+        activated_count: z.number(),
+        max_activations: z.number().optional(),
+      },
+    },
+    async (c, args) => {
+      const ids = [...new Set(args.offer_ids.map((id) => id.trim()).filter(Boolean))];
+      if (ids.length === 0) throw new Error("provide at least one offer id from ah_get_personal_offers");
+      const p = await bonusPeriod(ctx, c, args.period);
+      if (typeof p === "string") throw new Error(p);
+      const box = await getBonusBox(c, p);
+      const byId = new Map(box.offers.map((o) => [o.id, o]));
+      const unknown = ids.filter((id) => !byId.has(id));
+      if (unknown.length) {
+        throw new Error(
+          `not a personal offer for ${p.start} to ${p.end}: ${unknown.join(", ")}; get offer ids from ah_get_personal_offers`,
+        );
+      }
+      const wanted = ids.map((id) => byId.get(id)!);
+      const todo = wanted.filter((o) => !o.activated);
+      let activatedCount = box.offers.filter((o) => o.activated).length;
+      if (box.maxActivations !== undefined && activatedCount + todo.length > box.maxActivations) {
+        throw new Error(
+          `the user has activated ${activatedCount} of ${box.maxActivations} personal offers this week, ` +
+            `so ${Math.max(box.maxActivations - activatedCount, 0)} more can be activated, not ${todo.length}`,
+        );
+      }
+
+      const activated: { id: string; title: string }[] = [];
+      const failed: { id: string; title?: string; error: string }[] = [];
+      // One at a time: AH counts activations against the weekly limit. Errors are caught here, not thrown,
+      // so the offers already activated (which can't be undone) are always reported.
+      let stopped: string | undefined;
+      for (const o of todo) {
+        if (stopped) {
+          failed.push({ id: o.id, title: o.title, error: `not attempted: ${stopped}` });
+          continue;
+        }
+        try {
+          // withRetry retries only a 429, which AH answers without activating.
+          await withRetry("ah_activate_personal_offer", () => activatePersonalOffer(c, o));
+          activated.push({ id: o.id, title: o.title });
+          activatedCount++;
+        } catch (err) {
+          const message = (err as Error).message;
+          failed.push({ id: o.id, title: o.title, error: message });
+          if (isUnauthorized(err)) stopped = "the Albert Heijn login expired; log in again (ah_login) and retry these";
+        }
+      }
+      return structured({
+        activated,
+        already_active: wanted.filter((o) => o.activated).map((o) => ({ id: o.id, title: o.title })),
+        failed,
+        activated_count: activatedCount,
+        max_activations: box.maxActivations,
+      });
+    },
+  );
+}
+
+/** More than AH has ever allowed per week; AH's own limit is checked per call. */
+const MAX_ACTIVATIONS = 20;
+
+const personalOfferView = z.object({
+  id: z.string(),
+  title: z.string(),
+  url: z.string(),
+  status: z.enum(["activated", "available"]),
+  category: z.string().optional(),
+  product_id: z.number().optional(),
+  product_count: z.number().optional(),
+  unit: z.string().optional(),
+  original_price: z.number().optional(),
+  bonus_price: z.number().optional(),
+  discount_percentage: z.number().optional(),
+  store_only: z.boolean().optional(),
+});
+
+/** Whole percent off, or undefined without both prices or a discount. */
+function discountPercentage(was: number | undefined, now: number | undefined): number | undefined {
+  return (was && now && Math.round((1 - now / was) * 100)) || undefined;
+}
+
+function viewPersonalOffer(o: PersonalOffer): z.infer<typeof personalOfferView> {
+  return {
+    id: o.id,
+    title: o.title,
+    url: o.product ? productUrl(o.product.id, o.product.title) : bonusGroupUrl(o.id),
+    status: o.activated ? "activated" : "available",
+    category: o.category,
+    product_id: o.product?.id,
+    product_count: o.productCount,
+    unit: o.salesUnitSize,
+    original_price: o.priceWas || undefined,
+    bonus_price: o.priceNow || undefined,
+    discount_percentage: discountPercentage(o.priceWas, o.priceNow),
+    store_only: o.storeOnly || undefined,
+  };
 }
 
 /** The requested period, or a message if next week's bonus is not published yet. */

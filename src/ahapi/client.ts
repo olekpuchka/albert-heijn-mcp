@@ -132,12 +132,28 @@ export class AhClient {
 
   /** Runs a GraphQL operation; returns its data or throws GraphQLError. */
   async graphql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
-    const res = await this.request<{ data?: T; errors?: { message: string }[] }>("/graphql", {
+    const { data, errors } = await this.graphqlPartial<T>(query, variables);
+    if (errors) throw errors;
+    return data as T;
+  }
+
+  /**
+   * Runs a GraphQL operation and returns what it got: AH answers a field that fails with null and an
+   * error, and the other fields of the same request still carry data. For requests that batch
+   * independent lookups, where one failing entry shouldn't lose the rest.
+   */
+  async graphqlPartial<T>(
+    query: string,
+    variables?: Record<string, unknown>,
+  ): Promise<{ data: Partial<T> | undefined; errors: GraphQLError | undefined }> {
+    const res = await this.request<{ data?: Partial<T> | null; errors?: { message: string }[] }>("/graphql", {
       method: "POST",
       body: { query, variables: variables ?? {} },
     });
-    if (res.errors?.length) throw new GraphQLError(res.errors.map((e) => e.message));
-    return res.data as T;
+    return {
+      data: res.data ?? undefined,
+      errors: res.errors?.length ? new GraphQLError(res.errors.map((e) => e.message)) : undefined,
+    };
   }
 }
 

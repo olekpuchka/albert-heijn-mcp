@@ -368,6 +368,8 @@ Tools that return data also return it as [structured output](https://modelcontex
 | `ah_get_product_alternatives` | Similar products and substitutes AH suggests for a product. |
 | `ah_get_bonus_offers` | This week's bonus offers, or next week's with `period=next`. `previously_bought=true` limits them to products you bought before (AH's "Eerder gekocht"). Can filter by keyword. |
 | `ah_get_bonus_group_products` | The individual products behind a group deal such as "2+1 gratis". |
+| `ah_get_personal_offers` | Your personal offers (Bonus Box): which are activated, which you can still activate, and how many you may activate this week. |
+| `ah_activate_personal_offer` | Activate personal offers you choose. AH limits activations per week and they can't be undone. |
 | `ah_search_stores` | Nearby stores, by postal code or your own address. |
 | `ah_get_last_chance_items` | Vandaag-af markdowns in a store; the one nearest your address by default. |
 
@@ -424,7 +426,7 @@ Choosing a delivery or pick-up slot in the AH app moves your shopping list into 
 |---|---|
 | `ah_get_orders` | Upcoming delivery orders, or past ones with `past=true`. |
 | `ah_get_order_details` | Products in one order. |
-| `ah_get_frequent_items` | Your most-ordered products, counted over your delivery orders. |
+| `ah_get_frequent_items` | The products you buy most, counted over your delivery orders and in-store receipts of the last few months (`months`, default 3). `source` limits it to `online` or `in_store`. |
 | `ah_get_receipts` | Recent in-store receipts (kassabonnen). |
 | `ah_get_receipt_details` | Items, discounts and payment for one receipt. |
 

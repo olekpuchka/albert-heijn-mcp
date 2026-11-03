@@ -135,6 +135,9 @@ export async function getProduct(c: AhClient, id: number): Promise<Product> {
   return res.productCard;
 }
 
+/** Ids per productsByIds call that keep the request URL a safe length. */
+export const PRODUCT_IDS_BATCH = 50;
+
 /** Returns products in the order of ids. */
 export async function productsByIds(c: AhClient, ids: number[]): Promise<Product[]> {
   const params = new URLSearchParams({ sortOn: "INPUT_PRODUCT_IDS" });
@@ -160,4 +163,25 @@ export async function getNutrition(c: AhClient, id: number): Promise<Nutrient[] 
     product: { tradeItem: { nutritions: { nutrients: Nutrient[] }[] | null } | null };
   }>(query, { id });
   return data.product.tradeItem?.nutritions?.[0]?.nutrients;
+}
+
+/** Most till ids convertPosIds takes in one call (one GraphQL request). */
+export const POS_IDS_BATCH = 100;
+
+/** Maps up to POS_IDS_BATCH receipt (till) product ids to webshop product ids; ids AH can't map are left out. */
+export async function convertPosIds(c: AhClient, posIds: number[]): Promise<Map<number, number>> {
+  const ids = [...new Set(posIds)].filter((id) => Number.isInteger(id) && id > 0);
+  if (ids.length > POS_IDS_BATCH) throw new Error(`at most ${POS_IDS_BATCH} till ids per call`);
+  const out = new Map<number, number>();
+  if (ids.length === 0) return out;
+  // Ids are integers, so inlining them is safe.
+  const fields = ids.map((id, j) => `p${j}: productConvertId(sourceId: ${id})`).join(" ");
+  // An id AH fails on stays unmapped without losing the rest of the batch.
+  const { data, errors } = await c.graphqlPartial<Record<string, number | null>>(`query ConvertPosIds { ${fields} }`);
+  if (!data) throw errors ?? new Error("AH returned no product ids");
+  ids.forEach((id, j) => {
+    const webshopId = data[`p${j}`];
+    if (webshopId && webshopId > 0) out.set(id, webshopId);
+  });
+  return out;
 }
