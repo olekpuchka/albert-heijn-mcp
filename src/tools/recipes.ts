@@ -3,8 +3,10 @@ import { z } from "zod";
 import {
   addProductsToShoppingList,
   ahPageUrl,
+  getMealPlan,
   getRecipe,
   type Product,
+  productUrl,
   type RecipeFilter,
   type RecipeSort,
   recipeUrl,
@@ -14,6 +16,9 @@ import { addAuthedTool, nonFatal, orDefault, parallel, structured, type ToolCont
 import { search } from "./products.ts";
 import { listCall } from "./shoppingList.ts";
 import { productSummary, summarizeProduct } from "./views.ts";
+
+/** Title of a planner entry AH sent without one. */
+const UNTITLED = "(untitled; see the AH app)";
 
 const num = z.number().optional();
 const str = z.string().optional();
@@ -436,6 +441,75 @@ export function registerRecipeTools(server: McpServer, ctx: ToolContext): void {
         failed: wanted.filter((_, i) => errors[i]).map((i) => i.text),
         dry_run: Boolean(args.dry_run),
       });
+    },
+  );
+
+  addAuthedTool(
+    server,
+    ctx,
+    {
+      name: "ah_get_meal_plan",
+      title: "Albert Heijn: Meal Plan",
+      kind: "readOnly",
+      description:
+        "Get the user's meal plan from the Albert Heijn app's weekplanner, per day from today (about two weeks): " +
+        "planned Allerhande recipes, their own recipes, products and notes. " +
+        "Use the recipe_id of a planned Allerhande recipe with ah_get_recipe or ah_add_recipe_to_shopping_list, " +
+        "e.g. to shop for the week's dinners; the user's own recipes (own_recipe_id) can't be opened with those tools. " +
+        "incomplete=true means AH failed on some days or entries, so some may be missing or shown as type other. Planning recipes is done in the AH app.",
+      input: {
+        include_empty_days: z.boolean().optional().describe("Also list days with nothing planned (default false)"),
+      },
+      output: {
+        incomplete: z.boolean().optional(),
+        days: z.array(
+          z.object({
+            date: z.string(),
+            items: z.array(
+              z.object({
+                type: z.enum(["recipe", "own_recipe", "product", "note", "other"]),
+                title: z.string(),
+                recipe_id: z.number().optional(),
+                own_recipe_id: z.number().optional(),
+                product_id: z.number().optional(),
+                url: z.string().optional(),
+              }),
+            ),
+          }),
+        ),
+      },
+    },
+    async (c, args) => {
+      const { days: plan, incomplete } = await getMealPlan(c);
+      const days = plan
+        .filter((d) => args.include_empty_days || d.items.length > 0)
+        .map((d) => ({
+          date: d.date,
+          items: d.items.map((i) => {
+            switch (i.kind) {
+              case "recipe":
+                return { type: i.kind, title: i.title ?? UNTITLED, recipe_id: i.recipeId, url: i.slug ? recipeUrl(i.recipeId, i.slug) : undefined };
+              case "own_recipe":
+                return { type: i.kind, title: i.title ?? UNTITLED, own_recipe_id: i.recipeId };
+              case "product":
+                // Without a title there's no slug; the id alone still finds the product.
+                return { type: i.kind, title: i.title ?? UNTITLED, product_id: i.productId, url: productUrl(i.productId, i.title) };
+              case "note":
+                return { type: i.kind, title: i.text || "(empty note)" };
+              case "other":
+                return { type: i.kind, title: i.title ?? "an entry this server can't show; see the AH app" };
+            }
+          }),
+        }));
+      const range = plan.length ? ` from ${plan[0]!.date} to ${plan.at(-1)!.date}` : "";
+      return structured(
+        { days, incomplete: incomplete || undefined },
+        plan.some((d) => d.items.length)
+          ? undefined
+          : incomplete
+            ? "Some of the meal plan could not be loaded from AH, and the rest is empty; check the AH app."
+            : `The meal plan is empty${range}. Recipes are planned in the AH app.`,
+      );
     },
   );
 }

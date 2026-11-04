@@ -1,10 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { fullName, getMember, LOGIN_URL } from "../ahapi/index.ts";
+import { fullName, getMember, getSavings, LOGIN_URL, type Savings } from "../ahapi/index.ts";
 import { openInDefaultBrowser } from "../auth/browser.ts";
 import { extractCode, manualLoginSteps, STALE_LOGIN } from "../auth/login.ts";
 import { log } from "../log.ts";
-import { addAuthedTool, addTool, structured, text, type ToolContext } from "./common.ts";
+import { addAuthedTool, addTool, nonFatal, structured, text, type ToolContext, withRetry } from "./common.ts";
 
 export function registerAccountTools(server: McpServer, ctx: ToolContext): void {
   addTool(
@@ -116,18 +116,60 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
       name: "ah_get_member_profile",
       title: "Albert Heijn: Member Profile",
       kind: "readOnly",
-      output: { name: z.string(), email: z.string().optional(), bonus_card_number: z.string().optional() },
+      output: {
+        name: z.string(),
+        email: z.string().optional(),
+        bonus_card_number: z.string().optional(),
+        koopzegels: z
+          .object({
+            stamps: z.number().optional(),
+            full_booklets: z.number().optional(),
+            invested: z.number().optional(),
+            interest: z.number().optional(),
+            payout_value: z.number().optional(),
+          })
+          .optional(),
+        air_miles: z.number().optional(),
+        air_miles_error: z.string().optional(),
+        savings_error: z.string().optional(),
+      },
       description:
-        "Get your Albert Heijn member profile. " +
-        "Returns name, email (masked), and bonus_card_number (last 4 digits only).",
+        "Get your Albert Heijn member profile and savings. " +
+        "Returns name, email (masked), bonus_card_number (last 4 digits only), " +
+        "koopzegels (savings stamps: stamps saved, full booklets, euros invested, interest earned, and payout_value " +
+        "they are worth now), and the air_miles balance.",
     },
     async (c) => {
-      const m = await getMember(c);
+      const [m, savings] = await Promise.all([
+        // Not the member cache: the profile should show changes made in the AH app right away.
+        getMember(c),
+        // The profile still comes back if the balances can't.
+        nonFatal(
+          () => withRetry("ah_get_member_profile", () => getSavings(c)),
+          (err): Savings => {
+            log.warn("could not fetch savings", { tool: "ah_get_member_profile", err });
+            // The details stay in the log: an AH error can quote a whole response body.
+            return { unavailable: ["koopzegels", "air_miles"] };
+          },
+        ),
+      ]);
       const card = m.bonusCardNumber;
+      const k = savings.koopzegels;
       return structured({
         name: fullName(m),
         email: maskEmail(m.email) || undefined,
         bonus_card_number: card ? (card.length > 4 ? `****${card.slice(-4)}` : card) : undefined,
+        koopzegels: k && {
+          stamps: k.stamps,
+          full_booklets: k.fullBooklets,
+          invested: k.invested,
+          interest: k.interest,
+          payout_value: k.payout,
+        },
+        air_miles: savings.airMiles?.balance,
+        air_miles_error: savings.airMiles?.error,
+        // A balance listed here may be missing or incomplete.
+        savings_error: savings.unavailable.length ? `could not fully fetch: ${savings.unavailable.join(", ")}` : undefined,
       });
     },
   );

@@ -36,11 +36,14 @@ export class TtlCache<V> {
     this.#entries.set(key, { value, expiresAt: now + this.#ttlMs });
   }
 
-  /** The cached value, or load()'s result, which is then cached. */
-  async getOrLoad(key: string, load: () => Promise<V>): Promise<V> {
+  /**
+   * The cached value, or load()'s result, which is then cached if keep allows (default: always), e.g. not
+   * an empty list that may be a hiccup.
+   */
+  async getOrLoad(key: string, load: () => Promise<V>, keep: (value: V) => boolean = () => true): Promise<V> {
     if (this.has(key)) return this.get(key) as V;
     const value = await load();
-    this.set(key, value);
+    if (keep(value)) this.set(key, value);
     return value;
   }
 }

@@ -26,27 +26,36 @@ export async function getReceipts(c: AhClient, limit: number, offset = 0): Promi
 
 export interface Receipt {
   id: string;
-  items: { name: string; quantity: number; unitPrice?: number; total: number }[];
+  /** total excludes deposit (statiegeld), which AH lists per line. */
+  items: { name: string; quantity: number; unitPrice?: number; total: number; deposit?: number }[];
   discounts: { name: string; amount: number }[];
+  /** Koopzegels (savings stamps) bought at the till. */
+  stamps?: { quantity: number; amount: number };
   payments: { method: string; amount: number }[];
+  /** What the receipt came to: items, deposit and stamps, less discounts. */
+  total?: number;
 }
 
 export async function getReceipt(c: AhClient, id: string): Promise<Receipt> {
   const query = `query Receipt($id: String!) {
   posReceiptDetails(id: $id) {
     id
-    products { name quantity price { amount } amount { amount } }
+    products { name quantity price { amount } amount { amount } deposit { amount } }
     discounts { name amount { amount } }
+    stamps { quantity amount { amount } }
     payments { method amount { amount } }
+    total { amount }
   }
 }`;
   type Money = { amount: number } | null;
   const { posReceiptDetails: d } = await c.graphql<{
     posReceiptDetails: {
       id: string;
-      products?: { name: string; quantity: number; price?: Money; amount?: Money }[] | null;
+      products?: { name: string; quantity: number; price?: Money; amount?: Money; deposit?: Money }[] | null;
       discounts?: { name: string; amount?: Money }[] | null;
+      stamps?: { quantity?: number | null; amount?: Money } | null;
       payments?: { method: string; amount?: Money }[] | null;
+      total?: Money;
     };
   }>(query, { id });
   return {
@@ -56,9 +65,14 @@ export async function getReceipt(c: AhClient, id: string): Promise<Receipt> {
       quantity: p.quantity,
       unitPrice: p.price?.amount,
       total: p.amount?.amount ?? 0,
+      deposit: p.deposit?.amount || undefined,
     })),
     discounts: (d.discounts ?? []).map((x) => ({ name: x.name, amount: x.amount?.amount ?? 0 })),
+    stamps: d.stamps?.quantity || d.stamps?.amount?.amount
+      ? { quantity: d.stamps.quantity ?? 0, amount: d.stamps.amount?.amount ?? 0 }
+      : undefined,
     payments: (d.payments ?? []).map((x) => ({ method: x.method, amount: x.amount?.amount ?? 0 })),
+    total: d.total?.amount,
   };
 }
 

@@ -36,15 +36,23 @@ export function registerReceiptTools(server: McpServer, ctx: ToolContext): void 
       output: {
         id: z.string(),
         items: z.array(
-          z.object({ name: z.string(), quantity: z.number().optional(), unit_price: z.number().optional(), total: z.number() }),
+          z.object({
+            name: z.string(),
+            quantity: z.number().optional(),
+            unit_price: z.number().optional(),
+            total: z.number(),
+            deposit: z.number().optional(),
+          }),
         ),
         discounts: z.array(z.object({ name: z.string(), amount: z.number() })).optional(),
+        koopzegels: z.object({ quantity: z.number(), amount: z.number() }).optional(),
         payments: z.array(z.object({ method: z.string(), amount: z.number() })).optional(),
+        total_amount: z.number().optional(),
       },
       description:
         "Get full details of a single Albert Heijn in-store receipt (kassabon) by its id. " +
-        "Returns all purchased items with name, quantity, unit price and line total, " +
-        "plus any discounts and payment method. " +
+        "Returns all purchased items with name, quantity, unit price, line total and deposit (statiegeld), " +
+        "plus any discounts, koopzegels (savings stamps) bought, payment method and total_amount. " +
         "Get the id from ah_get_receipts first.",
       input: { id: z.string().describe("Receipt transaction ID from ah_get_receipts") },
     },
@@ -58,9 +66,12 @@ export function registerReceiptTools(server: McpServer, ctx: ToolContext): void 
           quantity: it.quantity || undefined,
           unit_price: it.unitPrice || undefined,
           total: it.total,
+          deposit: it.deposit,
         })),
         discounts: r.discounts.length ? r.discounts : undefined,
+        koopzegels: r.stamps,
         payments: r.payments.length ? r.payments : undefined,
+        total_amount: r.total,
       });
     },
   );

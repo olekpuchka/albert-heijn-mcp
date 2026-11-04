@@ -73,9 +73,16 @@ export function wrapError(message: string, err: unknown): ContextError {
 
 /** The errors array of a GraphQL response. */
 export class GraphQLError extends Error implements LogSafe {
-  constructor(messages: string[]) {
+  /** Top-level fields the errors belong to, where AH says. */
+  readonly fields: string[];
+  /** Some error came without a field, so it may belong to any. */
+  readonly unattributed: boolean;
+
+  constructor(messages: string[], fields: string[] = [], unattributed = false) {
     super(`AH GraphQL error: ${messages.join("; ")}`);
     this.name = "GraphQLError";
+    this.fields = fields;
+    this.unattributed = unattributed;
   }
 
   logText(): string {
@@ -146,13 +153,19 @@ export class AhClient {
     query: string,
     variables?: Record<string, unknown>,
   ): Promise<{ data: Partial<T> | undefined; errors: GraphQLError | undefined }> {
-    const res = await this.request<{ data?: Partial<T> | null; errors?: { message: string }[] }>("/graphql", {
+    const res = await this.request<{ data?: Partial<T> | null; errors?: { message: string; path?: (string | number)[] }[] }>("/graphql", {
       method: "POST",
       body: { query, variables: variables ?? {} },
     });
     return {
       data: res.data ?? undefined,
-      errors: res.errors?.length ? new GraphQLError(res.errors.map((e) => e.message)) : undefined,
+      errors: res.errors?.length
+        ? new GraphQLError(
+            res.errors.map((e) => e.message),
+            res.errors.flatMap((e) => (typeof e.path?.[0] === "string" ? [e.path[0]] : [])),
+            res.errors.some((e) => typeof e.path?.[0] !== "string"),
+          )
+        : undefined,
     };
   }
 }

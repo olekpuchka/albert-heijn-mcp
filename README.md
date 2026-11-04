@@ -47,6 +47,8 @@ Ask in Dutch, English or any language your assistant speaks:
 
 > *"Plan three weeknight dinners around what's on bonus this week."*
 
+> *"Put everything for the recipes in my AH meal planner on my shopping list."*
+
 **Save money**
 
 > *"Which products I usually buy are on bonus this week?"*
@@ -55,11 +57,19 @@ Ask in Dutch, English or any language your assistant speaks:
 
 > *"Is next week's bonus out yet? If not, when does it appear?"*
 
+> *"Which of my personal offers are worth activating this week?"*
+
+> *"How many koopzegels do I have, and what are they worth?"*
+
 > *"What's in the 2+1 gratis kaas deal?"*
 
 **Shop**
 
-> *"Put the products I've had delivered at least three times back on my list."*
+> *"Put the products I buy most back on my list."*
+
+> *"What's this product, and is it on bonus?"* (with a photo of its barcode)
+
+> *"What's the cheapest cheese at AH right now?"*
 
 > *"Find organic, gluten-free pasta, cheapest first."*
 
@@ -354,7 +364,7 @@ Tools that return data also return it as [structured output](https://modelcontex
 |---|---|
 | `ah_login` | Log in: opens a login window on your computer, or returns AH's login link and completes the login with the code you paste back. |
 | `ah_logout` | Delete the stored tokens, to switch accounts or reset a session. |
-| `ah_get_member_profile` | Name, masked email, and bonus card number (last 4 digits). |
+| `ah_get_member_profile` | Name, masked email, bonus card number (last 4 digits), and your savings: koopzegels (stamps, and what they're worth with interest) and Air Miles. |
 
 </details>
 
@@ -363,8 +373,9 @@ Tools that return data also return it as [structured output](https://modelcontex
 
 | Tool | Description |
 |---|---|
-| `ah_search_products` | Search one or more keywords at once; Dutch terms work best. Filter by `bonus=true` or by `filters` (organic, vegan, gluten_free and other diets, allergens and labels), and `sort` by price, what you buy most, or Nutri-Score. |
-| `ah_get_products` | Details for one or more products. `include_nutritional_info=true` adds the nutrition table. |
+| `ah_search_products` | Search one or more keywords at once; Dutch terms work best. Filter by `bonus=true` or by `filters` (organic, vegan, gluten_free and other diets, allergens and labels), and `sort` by price, what you buy most, or Nutri-Score. `category_id` limits it to one category, or lists the category on its own. |
+| `ah_get_products` | Details for one or more products, by product ID or by `barcodes` (the number under a barcode). `include_nutritional_info=true` adds the nutrition table. |
+| `ah_get_categories` | AH's product categories and their subcategories, for `category_id` in `ah_search_products`. |
 | `ah_get_product_alternatives` | Similar products and substitutes AH suggests for a product. |
 | `ah_get_bonus_offers` | This week's bonus offers, or next week's with `period=next`. `previously_bought=true` limits them to products you bought before (AH's "Eerder gekocht"). Can filter by keyword. |
 | `ah_get_bonus_group_products` | The individual products behind a group deal such as "2+1 gratis". |
@@ -382,6 +393,7 @@ Tools that return data also return it as [structured output](https://modelcontex
 |---|---|
 | `ah_search_recipes` | Search Allerhande recipes; Dutch terms work best. `filters` narrows by diet, course, cuisine, occasion, season or cooking method (e.g. `vegetarian`, `quick`, `italian`), and works without a query too; `sort` orders by relevance, newest or popular. |
 | `ah_get_recipe` | Ingredients, steps, and nutrition per serving. `servings` scales the ingredients. |
+| `ah_get_meal_plan` | What's planned in the AH app's weekplanner for the next two weeks: recipes, products and notes. |
 | `ah_add_recipe_to_shopping_list` | Match a recipe's ingredients to products and add them to the list in one step. It prefers products on bonus (`prefer_bonus=false` turns that off); `skip` leaves out what you have, and `dry_run=true` previews the matches. |
 
 </details>
@@ -428,7 +440,7 @@ Choosing a delivery or pick-up slot in the AH app moves your shopping list into 
 | `ah_get_order_details` | Products in one order. |
 | `ah_get_frequent_items` | The products you buy most, counted over your delivery orders and in-store receipts of the last few months (`months`, default 3). `source` limits it to `online` or `in_store`. |
 | `ah_get_receipts` | Recent in-store receipts (kassabonnen). |
-| `ah_get_receipt_details` | Items, discounts and payment for one receipt. |
+| `ah_get_receipt_details` | Items, deposit, discounts, koopzegels bought and payment for one receipt, with its total. |
 
 </details>
 
@@ -436,8 +448,8 @@ Choosing a delivery or pick-up slot in the AH app moves your shopping list into 
 
 - **Delivery orders can't be started through the API.** `ah_get_delivery_slots` lists the windows, but booking one, which starts the order, happens in the AH app or on ah.nl. While the order is active, AH doesn't serve the shopping list; the tools say so and point to the order tools.
 - **Ticking off shopping-list items isn't supported:** the API returns no usable item IDs.
-- **Bonus Box**, AH's personal weekly deals, is not available: its API is unknown.
-- **Limits per call:** at most 99 of a product, 50 items, and 100 characters for a free-text item or list name.
+- **Recipes can't be planned in the meal planner:** `ah_get_meal_plan` reads it, but AH's API refuses to add recipes, so planning happens in the AH app.
+- **Limits per call:** at most 99 of a product, 50 items, 100 characters for a free-text item or list name, and details for 20 products.
 
 ## Development
 

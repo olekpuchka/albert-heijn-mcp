@@ -1,3 +1,4 @@
+import { log } from "../log.ts";
 import type { AhClient } from "./client.ts";
 
 /** Allerhande recipe search result. */
@@ -53,7 +54,8 @@ function decodeEntities(s: string): string {
   return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
     if (e[0] === "#") {
       const code = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : m;
+      // Beyond Unicode, fromCodePoint throws: leave such an entity as written.
+      return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : m;
     }
     return named[e.toLowerCase()] ?? m;
   });
@@ -127,5 +129,80 @@ export async function getRecipe(c: AhClient, id: number, servings?: number): Pro
       name: decodeEntities(i.name?.singular || i.text),
     })),
     preparation: r.preparation && { steps: r.preparation.steps?.map(decodeEntities) },
+  };
+}
+
+/** An entry of the AH app's meal planner (weekplanner): a recipe, the member's own recipe, a product or a note. */
+export type PlannerItem =
+  | { kind: "recipe"; recipeId: number; title?: string; slug?: string }
+  | { kind: "own_recipe"; recipeId: number; title?: string }
+  | { kind: "product"; productId: number; title?: string }
+  | { kind: "note"; text: string }
+  /** An entry of a kind this server doesn't know, or missing its id, so it isn't hidden. */
+  | { kind: "other"; title?: string };
+
+/**
+ * The planner from today, one entry per day (AH returns two weeks), with what is planned on it.
+ * incomplete: AH failed on some days or entries, so the plan may be missing some.
+ */
+export async function getMealPlan(c: AhClient): Promise<{ days: { date: string; items: PlannerItem[] }[]; incomplete: boolean }> {
+  const query = `query MealPlan {
+  recipeWeekPlannerOverview {
+    days {
+      date
+      items {
+        __typename
+        ... on WeekPlannerRecipeItem { recipeId recipeTitle recipe { slug } }
+        ... on WeekPlannerMemberRecipeItem { recipeId recipeTitle }
+        ... on WeekPlannerNoteItem { text }
+        ... on WeekPlannerProductItem { productId productTitle }
+      }
+    }
+  }
+}`;
+  type RawItem = {
+    __typename?: string;
+    recipeId?: number | null;
+    recipeTitle?: string | null;
+    recipe?: { slug?: string | null } | null;
+    text?: string | null;
+    productId?: number | null;
+    productTitle?: string | null;
+  };
+  // An entry AH fails to resolve (e.g. an unpublished recipe) comes back null without losing the other days.
+  const { data, errors } = await c.graphqlPartial<{
+    recipeWeekPlannerOverview?: { days?: ({ date: string; items?: (RawItem | null)[] | null } | null)[] | null } | null;
+  }>(query);
+  const days = data?.recipeWeekPlannerOverview?.days;
+  // With errors, no days, or days that all failed, is a failed fetch; an empty list is an empty plan.
+  if (!data || (errors && (!days || (days.length > 0 && !days.some(Boolean))))) throw errors ?? new Error("AH returned no meal plan");
+  if (errors) log.warn("some meal plan entries could not be fetched", { err: errors });
+  // undefined when AH sent no title.
+  const titleOf = (t: string | null | undefined) => (t ? decodeEntities(t) : undefined);
+  const toItem = (i: RawItem | null): PlannerItem => {
+    if (!i) return { kind: "other" };
+    switch (i.__typename) {
+      case "WeekPlannerRecipeItem":
+        if (i.recipeId) {
+          return { kind: "recipe", recipeId: i.recipeId, title: titleOf(i.recipeTitle), slug: i.recipe?.slug ?? undefined };
+        }
+        break;
+      case "WeekPlannerMemberRecipeItem":
+        if (i.recipeId) return { kind: "own_recipe", recipeId: i.recipeId, title: titleOf(i.recipeTitle) };
+        break;
+      case "WeekPlannerProductItem":
+        if (i.productId) return { kind: "product", productId: i.productId, title: titleOf(i.productTitle) };
+        break;
+      case "WeekPlannerNoteItem":
+        return { kind: "note", text: decodeEntities(i.text ?? "") };
+    }
+    // A kind this server doesn't know, or an entry missing its id: shown, not hidden.
+    const title = i.recipeTitle ?? i.productTitle ?? i.text;
+    return { kind: "other", title: title ? decodeEntities(title) : undefined };
+  };
+  // No planner yet (never used) is an empty plan; a day AH fails to resolve comes back null and is left out.
+  return {
+    days: (days ?? []).flatMap((d) => (d ? [{ date: d.date, items: (d.items ?? []).map(toItem) }] : [])),
+    incomplete: Boolean(errors),
   };
 }

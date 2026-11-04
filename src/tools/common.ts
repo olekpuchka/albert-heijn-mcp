@@ -7,7 +7,7 @@ import { NotLoggedInError, type Session, SessionExpiredError } from "../auth/ses
 import { DamagedTokensError } from "../auth/tokens.ts";
 import { log } from "../log.ts";
 import { TtlCache } from "./cache.ts";
-import type { BonusOffer, BonusPeriod, Member, Nutrient, Product } from "../ahapi/index.ts";
+import type { BonusOffer, BonusPeriod, Category, Member, Nutrient, Product } from "../ahapi/index.ts";
 
 /**
  * Limits on what one call can write. Text that goes on the user's lists is read back into every
@@ -35,8 +35,11 @@ export interface ToolContext {
   searches: TtlCache<Product[]>;
   products: TtlCache<Product>;
   nutrition: TtlCache<Nutrient[] | undefined>;
+  /** Barcode number → product id; only barcodes AH sells are kept. */
+  barcodes: TtlCache<number>;
   bonuses: TtlCache<BonusOffer[]>;
   bonusPeriods: TtlCache<BonusPeriod[]>;
+  categories: TtlCache<Category[]>;
   /** Keyed by access token, so another login never sees a cached profile. */
   members: TtlCache<Member>;
 }
@@ -50,8 +53,10 @@ export function newToolContext(session: Session, { remote, hosted }: { remote: b
     searches: new TtlCache(5 * 60_000),
     products: new TtlCache(10 * 60_000),
     nutrition: new TtlCache(60 * 60_000),
+    barcodes: new TtlCache(60 * 60_000),
     bonuses: new TtlCache(10 * 60_000),
     bonusPeriods: new TtlCache(10 * 60_000),
+    categories: new TtlCache(60 * 60_000),
     members: new TtlCache(30 * 60_000),
   };
 }
