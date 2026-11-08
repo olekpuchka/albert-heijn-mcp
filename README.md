@@ -375,7 +375,7 @@ Tools that return data also return it as [structured output](https://modelcontex
 |---|---|
 | `ah_search_products` | Search one or more keywords at once; Dutch terms work best. Filter by `bonus=true` or by `filters` (organic, vegan, gluten_free and other diets, allergens and labels), and `sort` by price, what you buy most, or Nutri-Score. `category_id` limits it to one category, or lists the category on its own. |
 | `ah_get_products` | Details for one or more products, by product ID or by `barcodes` (the number under a barcode). `include_nutritional_info=true` adds the nutrition table. |
-| `ah_get_categories` | AH's product categories and their subcategories, for `category_id` in `ah_search_products`. |
+| `ah_get_categories` | AH's top-level product categories, or a category's subcategories with their product counts, for `category_id` in `ah_search_products`. |
 | `ah_get_product_alternatives` | Similar products and substitutes AH suggests for a product. |
 | `ah_get_bonus_offers` | This week's bonus offers, or next week's with `period=next`. `previously_bought=true` limits them to products you bought before (AH's "Eerder gekocht"). Can filter by keyword. |
 | `ah_get_bonus_group_products` | The individual products behind a group deal such as "2+1 gratis". |

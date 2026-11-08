@@ -3,16 +3,18 @@ import { z } from "zod";
 import {
   type AhClient,
   getNutrition,
-  getProduct,
-  getCategories,
   getProductAlternatives,
+  getSubcategories,
   hasValidCheckDigit,
   normalizeBarcode,
+  type Nutrient,
   productIdByBarcode,
+  productsByIds,
   type Product,
   type SearchOptions,
   type SearchSort,
   searchProducts,
+  TOP_CATEGORIES,
 } from "../ahapi/index.ts";
 import { addAuthedTool, nonFatal, orDefault, parallel, structured, type ToolContext, withRetry } from "./common.ts";
 import { detailProduct, productDetail, productSummary, summarizeProduct } from "./views.ts";
@@ -243,21 +245,43 @@ export function registerProductTools(server: McpServer, ctx: ToolContext): void 
       for (const id of product_ids ?? []) if (id > 0) add(id);
       if (results.length === 0) throw new Error("provide at least one product ID or barcode");
 
-      // 3. Product details.
-      await parallel(wanted.length, 5, async (i) => {
-        const { id, barcode, at } = wanted[i]!;
-        const key = String(id);
-        results[at] = await nonFatal<Result>(
-          async () => {
-            const p = await ctx.products.getOrLoad(key, () => withRetry("ah_get_products", () => getProduct(c, id)));
-            const nutrition = include_nutritional_info
-              ? await ctx.nutrition.getOrLoad(key, () => withRetry("ah_get_products", () => getNutrition(c, id)))
-              : undefined;
-            return { ...detailProduct(p, nutrition), barcode };
-          },
-          (err) => ({ id, barcode, error: (err as Error).message }),
-        );
-      });
+      // 3. Product details, the uncached ones in one request, alongside the nutrition, which needs only the ids.
+      // Products are held here rather than re-read from the cache, where an entry can expire before it is used.
+      const found = new Map<number, Product>();
+      const missing: number[] = [];
+      for (const { id } of wanted) {
+        const p = ctx.products.get(String(id));
+        if (p) found.set(id, p);
+        else missing.push(id);
+      }
+      const nutrition = new Map<number, Nutrient[] | undefined | Error>();
+      const [fetchError] = await Promise.all([
+        missing.length === 0
+          ? undefined
+          : nonFatal(
+              async () => {
+                for (const p of await withRetry("ah_get_products", () => productsByIds(c, missing))) {
+                  found.set(p.webshopId, p);
+                  ctx.products.set(String(p.webshopId), p);
+                }
+                return undefined;
+              },
+              (err) => err as Error,
+            ),
+        include_nutritional_info &&
+          parallel(wanted.length, 5, async (i) => {
+            const { id } = wanted[i]!;
+            const load = () => ctx.nutrition.getOrLoad(String(id), () => withRetry("ah_get_products", () => getNutrition(c, id)));
+            nutrition.set(id, await nonFatal<Nutrient[] | undefined | Error>(load, (err) => err as Error));
+          }),
+      ]);
+      for (const { id, barcode, at } of wanted) {
+        const p = found.get(id);
+        const n = nutrition.get(id);
+        if (!p) results[at] = { id, barcode, error: fetchError?.message ?? `Albert Heijn has no product with ID ${id}` };
+        else if (n instanceof Error) results[at] = { id, barcode, error: n.message };
+        else results[at] = { ...detailProduct(p, n), barcode };
+      }
       return structured({ products: results });
     },
   );
@@ -298,29 +322,24 @@ export function registerProductTools(server: McpServer, ctx: ToolContext): void 
       title: "Albert Heijn: Product Categories",
       kind: "readOnly",
       description:
-        "List Albert Heijn's product categories (the aisles of ah.nl), e.g. 'Groente, aardappelen' or 'Kaas'. " +
-        "Without parent_id returns the top-level categories; with a parent_id, its subcategories. " +
+        "List Albert Heijn's product categories, e.g. 'Groente, aardappelen' or 'Kaas'. " +
+        "Without parent_id returns the top-level categories (the aisles of ah.nl); with a parent_id, its subcategories " +
+        "with their product counts. Categories overlap, so a subcategory can also appear under other parents. " +
         "Pass a category id as category_id to ah_search_products to search or list products in it.",
       input: {
         parent_id: z.number().int().positive().optional().describe("Category id whose subcategories to list"),
       },
-      output: { categories: z.array(z.object({ id: z.number(), name: z.string() })) },
+      output: { categories: z.array(z.object({ id: z.number(), name: z.string(), products: z.number().optional() })) },
     },
     async (c, { parent_id }) => {
-      const categories = await ctx.categories.getOrLoad(
-        String(parent_id ?? ""),
-        () => withRetry("ah_get_categories", () => getCategories(c, parent_id)),
-        // Not kept when empty: at the top level that's likely a hiccup at AH, and for a parent_id AH answers a
-        // leaf and a wrong id alike.
-        (list) => list.length > 0,
+      if (!parent_id) return structured({ categories: [...TOP_CATEGORIES] });
+      const categories = await ctx.categories.getOrLoad(String(parent_id), () =>
+        withRetry("ah_get_categories", () => getSubcategories(c, parent_id)),
+        // Not kept when empty or unknown: that may be a hiccup at AH rather than a leaf or a wrong id.
+        (list) => Boolean(list?.length),
       );
-      let message: string | undefined;
-      if (!categories.length) {
-        message = parent_id
-          ? `Category ${parent_id} has no subcategories (or is not a category id).`
-          : "AH returned no product categories.";
-      }
-      return structured({ categories }, message);
+      if (!categories) return structured({ categories: [] }, `No products are in category ${parent_id}: it is not a category id, or AH returned nothing for it.`);
+      return structured({ categories }, categories.length ? undefined : `Category ${parent_id} has no subcategories.`);
     },
   );
 }

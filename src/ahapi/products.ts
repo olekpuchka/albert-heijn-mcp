@@ -98,12 +98,24 @@ export interface SearchOptions {
   /** Only products on bonus. */
   bonus?: boolean;
   sort?: SearchSort;
-  /** Only products in this category (see getCategories); with an empty query, the whole category. */
+  /** Only products in this category (see getSubcategories, TOP_CATEGORIES); with an empty query, the whole category. */
   categoryId?: number;
 }
 
 /** Largest page AH serves. */
 const MAX_PAGE = 100;
+
+interface SearchResponse {
+  page?: { totalElements?: number };
+  products?: Product[];
+  /** Facets, e.g. the "taxonomy" one listing the categories of the results. */
+  filters?: { id: string; options?: { id: string; label: string; count: number }[] }[];
+}
+
+/** One page of AH's product search. */
+function searchPage(c: AhClient, params: URLSearchParams): Promise<SearchResponse> {
+  return c.request<SearchResponse>(`/mobile-services/product/search/v2?${params}`);
+}
 
 /** Searches by keyword; returns at most size products. */
 export async function searchProducts(c: AhClient, query: string, size: number, opts: SearchOptions = {}): Promise<Product[]> {
@@ -121,7 +133,7 @@ export async function searchProducts(c: AhClient, query: string, size: number, o
   // Several properties go comma-separated, which AH combines with AND.
   if (properties.length) params.set("filters", `property=${properties.join(",")}`);
   else if (opts.bonus) params.set("filters", "bonus=Bonus");
-  const res = await c.request<{ products?: Product[] }>(`/mobile-services/product/search/v2?${params}`);
+  const res = await searchPage(c, params);
   let products = res.products ?? [];
   if (opts.bonus) products = products.filter((p) => p.isBonus);
   if (byPrice) {
@@ -133,19 +145,19 @@ export async function searchProducts(c: AhClient, query: string, size: number, o
   return products.slice(0, size);
 }
 
-export async function getProduct(c: AhClient, id: number): Promise<Product> {
-  const res = await c.request<{ productCard: Product }>(`/mobile-services/product/detail/v4/fir/${id}`);
-  return res.productCard;
-}
-
 /** Ids per productsByIds call that keep the request URL a safe length. */
 export const PRODUCT_IDS_BATCH = 50;
 
-/** Returns products in the order of ids. */
+/** Returns products in the order of ids, PRODUCT_IDS_BATCH per request; ids AH doesn't know are left out. */
 export async function productsByIds(c: AhClient, ids: number[]): Promise<Product[]> {
-  const params = new URLSearchParams({ sortOn: "INPUT_PRODUCT_IDS" });
-  for (const id of ids) params.append("ids", String(id));
-  return (await c.request<Product[]>(`/mobile-services/product/search/v2/products?${params}`)) ?? [];
+  const products: Product[] = [];
+  // One batch at a time, so a long list doesn't send AH a burst of requests.
+  for (let i = 0; i < ids.length; i += PRODUCT_IDS_BATCH) {
+    const params = new URLSearchParams({ sortOn: "INPUT_PRODUCT_IDS" });
+    for (const id of ids.slice(i, i + PRODUCT_IDS_BATCH)) params.append("ids", String(id));
+    products.push(...((await c.request<Product[]>(`/mobile-services/product/search/v2/products?${params}`)) ?? []));
+  }
+  return products;
 }
 
 /** Nutrition table row. */
@@ -230,25 +242,61 @@ export async function productIdByBarcode(c: AhClient, barcode: string): Promise<
   }
 }
 
-/** A product category (AH's shelf), e.g. "Groente, aardappelen". */
+/** A product category, e.g. "Groente, aardappelen". */
 export interface Category {
   id: number;
   name: string;
+  /** Products in it, for subcategories (AH's count, which can include products not sold online). */
+  products?: number;
 }
 
-/** Top-level categories, or the subcategories of parentId. */
-export async function getCategories(c: AhClient, parentId?: number): Promise<Category[]> {
-  type Raw = { id: number; name: string };
-  if (!parentId) {
-    const res = await c.request<Raw[]>("/mobile-services/v1/product-shelves/categories");
-    return (res ?? []).map(({ id, name }) => ({ id, name }));
-  }
-  try {
-    const res = await c.request<{ children?: Raw[] | null }>(`/mobile-services/v1/product-shelves/categories/${parentId}/sub-categories`);
-    return (res?.children ?? []).map(({ id, name }) => ({ id, name }));
-  } catch (err) {
-    // A leaf category, or an id that isn't one.
-    if (hasStatus(err, 404)) return [];
-    throw err;
-  }
+/**
+ * AH's top-level categories (the aisles of ah.nl). The API has no list of them since the product-shelves
+ * endpoints were removed, and the search facets only name a sample of narrower categories.
+ */
+export const TOP_CATEGORIES: readonly Category[] = [
+  { id: 6401, name: "Groente, aardappelen" },
+  { id: 20885, name: "Fruit, verse sappen" },
+  { id: 1301, name: "Maaltijden, salades" },
+  { id: 9344, name: "Vlees" },
+  { id: 1651, name: "Vis" },
+  { id: 20128, name: "Vegetarisch, vegan en plantaardig" },
+  { id: 5481, name: "Vleeswaren" },
+  { id: 1192, name: "Kaas" },
+  { id: 1730, name: "Zuivel, eieren" },
+  { id: 1355, name: "Bakkerij" },
+  { id: 4246, name: "Glutenvrij" },
+  { id: 20824, name: "Borrel, chips, snacks" },
+  { id: 1796, name: "Pasta, rijst, wereldkeuken" },
+  { id: 6409, name: "Soepen, sauzen, kruiden, olie" },
+  { id: 20129, name: "Koek, snoep, chocolade" },
+  { id: 6405, name: "Ontbijtgranen, beleg" },
+  { id: 2457, name: "Tussendoortjes" },
+  { id: 5881, name: "Diepvries" },
+  { id: 1043, name: "Koffie, thee" },
+  { id: 20130, name: "Frisdrank, sappen, water" },
+  { id: 6406, name: "Bier, wijn, aperitieven" },
+  { id: 11717, name: "Gezondheid en sport" },
+  { id: 1045, name: "Drogisterij" },
+  { id: 18521, name: "Baby en kind" },
+  { id: 1165, name: "Huishouden" },
+  { id: 18519, name: "Huisdier" },
+  { id: 1057, name: "Koken, tafelen, vrije tijd" },
+];
+
+const TOP_CATEGORY_IDS = new Set(TOP_CATEGORIES.map((t) => t.id));
+
+/**
+ * Subcategories of parentId: the narrower categories its products fall into. AH's categories overlap, so one
+ * can show up under several parents. undefined if parentId has no products (not a category id).
+ */
+export async function getSubcategories(c: AhClient, parentId: number): Promise<Category[] | undefined> {
+  const res = await searchPage(c, new URLSearchParams({ query: "", page: "0", size: "1", taxonomyId: String(parentId) }));
+  const total = res.page?.totalElements ?? 0;
+  if (total === 0) return undefined;
+  const options = res.filters?.find((f) => f.id === "taxonomy")?.options ?? [];
+  // The facet also names the category itself and every category holding all its products (its ancestors).
+  return options
+    .map((o) => ({ id: Number(o.id), name: o.label, products: o.count }))
+    .filter((o) => Number.isInteger(o.id) && o.id > 0 && o.id !== parentId && !TOP_CATEGORY_IDS.has(o.id) && o.products < total);
 }

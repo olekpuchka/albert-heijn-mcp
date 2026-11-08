@@ -39,7 +39,7 @@ export interface ToolContext {
   barcodes: TtlCache<number>;
   bonuses: TtlCache<BonusOffer[]>;
   bonusPeriods: TtlCache<BonusPeriod[]>;
-  categories: TtlCache<Category[]>;
+  categories: TtlCache<Category[] | undefined>;
   /** Keyed by access token, so another login never sees a cached profile. */
   members: TtlCache<Member>;
 }

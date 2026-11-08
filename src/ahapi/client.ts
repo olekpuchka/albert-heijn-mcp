@@ -5,8 +5,8 @@ import { describeError, type LogSafe } from "../log.ts";
 // The API expects the official iOS app. If AH starts rejecting requests,
 // update the version and user agent to the current app release first.
 export const CLIENT_NAME = "appie-ios";
-const CLIENT_VERSION = "9.28";
-const USER_AGENT = "Appie/9.28 (iPhone17,3; iPhone; CPU OS 26_1 like Mac OS X)";
+const CLIENT_VERSION = "9.48";
+const USER_AGENT = "Appie/9.48 (iPhone17,3; iPhone; CPU OS 26_1 like Mac OS X)";
 const BASE_URL = "https://api.ah.nl";
 const TIMEOUT_MS = 30_000;
 
