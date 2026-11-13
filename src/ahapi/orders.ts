@@ -139,6 +139,20 @@ export interface DeliveryDay {
   slots: { start: string; end: string }[];
 }
 
+/** Minimum order value for home delivery per date as AH sends it (YYYY-MM-DD), in euros, for a Dutch postal code. */
+export async function deliveryMinimums(c: AhClient, postalCode: string): Promise<Map<string, number>> {
+  const query = `query OrderRulesMinimumValues($postalCode: Int) {
+  orderRulesMinimumValues(orderType: DELIVERY, postalCode: $postalCode) { minimumOrderValues { amount date } }
+}`;
+  // AH takes the four digits of the postal code as a number; without them it would answer for no address in particular.
+  const digits = /^\s*(\d{4})/.exec(postalCode)?.[1];
+  if (!digits) return new Map();
+  const data = await c.graphql<{
+    orderRulesMinimumValues: { minimumOrderValues: { amount: number; date: string }[] | null } | null;
+  }>(query, { postalCode: Number(digits) });
+  return new Map((data.orderRulesMinimumValues?.minimumOrderValues ?? []).map((v) => [v.date, v.amount]));
+}
+
 /** Delivery windows AH offers for address, per day, soonest first. Booking one is only possible in the AH app. */
 export async function getDeliverySlots(c: AhClient, address: MemberAddress): Promise<DeliveryDay[]> {
   const query = `query DeliverySlots($address: MemberAddressInput!) {

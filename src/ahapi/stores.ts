@@ -18,6 +18,15 @@ export async function searchStores(c: AhClient, postalCode: string): Promise<Sto
   return data.storesSearch.result ?? [];
 }
 
+/** The member's favourite store, as set in the AH app, or undefined if none is set. */
+export async function favouriteStore(c: AhClient): Promise<Store | undefined> {
+  const query = `query FavouriteStore {
+  storesFavouriteStore { id name storeType address { street houseNumber postalCode city } }
+}`;
+  const data = await c.graphql<{ storesFavouriteStore: Store | null }>(query);
+  return data.storesFavouriteStore?.id ? data.storesFavouriteStore : undefined;
+}
+
 /** Last-chance (vandaag-af) markdown item. */
 export interface Bargain {
   productId: number;

@@ -381,8 +381,8 @@ Tools that return data also return it as [structured output](https://modelcontex
 | `ah_get_bonus_group_products` | The individual products behind a group deal such as "2+1 gratis". |
 | `ah_get_personal_offers` | Your personal offers (Bonus Box): which are activated, which you can still activate, and how many you may activate this week. |
 | `ah_activate_personal_offer` | Activate personal offers you choose. AH limits activations per week and they can't be undone. |
-| `ah_search_stores` | Nearby stores, by postal code or your own address. |
-| `ah_get_last_chance_items` | Vandaag-af markdowns in a store; the one nearest your address by default. |
+| `ah_search_stores` | Nearby stores, by postal code or your own address, with your favourite store first. |
+| `ah_get_last_chance_items` | Vandaag-af markdowns in a store; your favourite store by default. |
 
 </details>
 
@@ -423,7 +423,7 @@ Choosing a delivery or pick-up slot in the AH app moves your shopping list into 
 
 | Tool | Description |
 |---|---|
-| `ah_get_delivery_slots` | Delivery windows at your address for the coming days. |
+| `ah_get_delivery_slots` | Delivery windows at your address for the coming days, with the minimum order value. |
 | `ah_get_cart` | Products in the active order, with total price and discount. |
 | `ah_update_cart_item` | Change a product's quantity; 0 takes it out. |
 | `ah_remove_from_cart` | Remove a product from the order. |

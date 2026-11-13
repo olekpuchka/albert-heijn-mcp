@@ -5,18 +5,21 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   type AhClient,
+  deliveryMinimums,
   getActiveOrder,
   getDeliverySlots,
   isNoActiveOrder,
   type Order,
   setOrderItems,
 } from "../ahapi/index.ts";
+import { log } from "../log.ts";
 import {
   addAuthedTool,
   cachedMember,
   confirmInput,
   formatDate,
   formatTime,
+  nonFatal,
   structured,
   orDefault,
   quantitySchema,
@@ -152,12 +155,14 @@ export function registerCartTools(server: McpServer, ctx: ToolContext): void {
       kind: "readOnly",
       output: {
         postal_code: z.string(),
-        days: z.array(z.object({ date: z.string(), windows: z.array(z.string()) })),
+        days: z.array(
+          z.object({ date: z.string(), minimum_order_value: z.number().optional(), windows: z.array(z.string()) }),
+        ),
       },
       description:
         "List the delivery time windows Albert Heijn offers at the member's address, per day (Dutch time). " +
         "Booking a slot is only possible in the AH app or on ah.nl; this shows when delivery is possible. " +
-        "Returns date and windows like '15:00-17:00'.",
+        "Returns date, windows like '15:00-17:00', and the minimum order value for delivery that day in euros.",
       input: {
         days: z.number().int().optional().describe("Number of days with slots to return (default 7)"),
       },
@@ -165,14 +170,31 @@ export function registerCartTools(server: McpServer, ctx: ToolContext): void {
     async (c, args) => {
       const { address } = await cachedMember(ctx, c);
       if (!address) throw new Error("the member profile has no delivery address; add one in the AH app");
-      const days = (await getDeliverySlots(c, address)).filter((d) => d.slots.length > 0);
+      const [slots, minimums] = await Promise.all([
+        getDeliverySlots(c, address),
+        // The minimum is extra information: the slots are still worth showing without it.
+        nonFatal(
+          () => deliveryMinimums(c, address.postalCode),
+          (err) => {
+            log.warn("could not fetch the minimum order value", { err });
+            return new Map<string, number>();
+          },
+        ),
+      ]);
+      const days = slots.filter((d) => d.slots.length > 0);
+      const minimumOn = new Map([...minimums].map(([date, amount]) => [formatDate(date, false), amount]));
       return structured(
         {
           postal_code: address.postalCode,
-          days: days.slice(0, orDefault(args.days, 7)).map((d) => ({
-            date: formatDate(d.date, false),
-            windows: d.slots.map((s) => `${formatTime(s.start)}-${formatTime(s.end)}`),
-          })),
+          days: days.slice(0, orDefault(args.days, 7)).map((d) => {
+            // AH sends the day as UTC midnight of the day before (e.g. 2026-11-13T23:00Z for the 14th): the Dutch date matches the minimums.
+            const date = formatDate(d.date, false);
+            return {
+              date,
+              minimum_order_value: minimumOn.get(date),
+              windows: d.slots.map((s) => `${formatTime(s.start)}-${formatTime(s.end)}`),
+            };
+          }),
         },
         days.length ? undefined : `AH offers no delivery slots for ${address.postalCode} right now.`,
       );
